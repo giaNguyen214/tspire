@@ -7,19 +7,19 @@ import os
 import shutil
 import io
 import zipfile
+import uuid 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 
-from config import Config
-from pipeline_runner import run_training_pipeline, initialize_logging
-from utils import setup_logging # Import setup_logging
+from .config import Config
+from .pipeline_runner import run_training_pipeline
+from .utils import setup_logging 
 
 app = FastAPI(
     title="Churn Model Training Pipeline API",
     description="Upload a CSV or XLSX file to train a full churn model pipeline.",
 )
 
-# Khởi tạo logging ngay khi app khởi động
 @app.on_event("startup")
 async def startup_event():
     setup_logging()
@@ -29,18 +29,12 @@ async def train_pipeline_endpoint(file: UploadFile = File(...)):
     """
     Nhận file data (CSV/XLSX), chạy toàn bộ pipeline huấn luyện,
     và trả về 1 file ZIP chứa 5 model PKL và 1 file JSON metrics.
-    
-    CẢNH BÁO: Đây là một request đồng bộ (synchronous) và sẽ mất
-    RẤT NHIỀU THỜI GIAN (vài phút đến vài giờ) để hoàn thành.
-    Hãy đảm bảo client của bạn có timeout đủ dài.
     """
     logger = logging.getLogger(__name__)
-    config = Config()
     
-    # Xác định đường dẫn file tạm
-    temp_file_path = config.temp_upload_path
+    # --- SỬA LỖI (Vấn đề 2) ---
     
-    # Kiểm tra đuôi file
+    # 1. Kiểm tra đuôi file gốc
     file_ext = os.path.splitext(file.filename)[1].lower()
     if file_ext not in [".csv", ".xlsx", ".xls"]:
         raise HTTPException(
@@ -48,17 +42,23 @@ async def train_pipeline_endpoint(file: UploadFile = File(...)):
             detail="Invalid file format. Please upload .csv, .xlsx, or .xls"
         )
     
+    # 2. Tạo đường dẫn file tạm ĐỘNG (trong thư mục /data)
+    temp_file_name = f"temp_upload_{uuid.uuid4()}{file_ext}"
+    # SỬA: Dùng Config.data_dir (thay vì Config.BASE_DIR)
+    temp_file_path = os.path.join(Config.data_dir, temp_file_name) 
+    
+    # --- Hết phần sửa ---
+
     logger.info(f"Receiving uploaded file: {file.filename}")
 
     try:
-        # 1. Lưu file upload vào file tạm
+        # 3. Lưu file upload vào file tạm (với đường dẫn mới)
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         logger.info(f"File saved temporarily to {temp_file_path}")
 
-        # 2. Chạy pipeline (Đây là bước tốn thời gian nhất)
+        # 4. Chạy pipeline (với đường dẫn mới)
         logger.info("Starting synchronous training pipeline...")
-        # Hàm này sẽ chạy (vài phút) và trả về list các file path
         output_files = run_training_pipeline(temp_file_path)
         
         if not output_files:
@@ -69,24 +69,23 @@ async def train_pipeline_endpoint(file: UploadFile = File(...)):
 
         logger.info("Pipeline finished. Zipping output files...")
         
-        # 3. Tạo file Zip trong bộ nhớ (in-memory)
+        # 5. Tạo file Zip trong bộ nhớ (in-memory)
         zip_io = io.BytesIO()
         with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for f_path in output_files:
                 if os.path.exists(f_path):
-                    # Ghi file vào zip, dùng tên file (basename)
                     zipf.write(f_path, arcname=os.path.basename(f_path))
                     logger.info(f"Added to zip: {f_path}")
                 else:
                     logger.warning(f"File not found, skipping: {f_path}")
 
-        # 4. Xóa file tạm
+        # 6. Xóa file tạm
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
             logger.info(f"Removed temp file: {temp_file_path}")
             
-        # 5. Trả về file Zip
-        zip_io.seek(0) # Đưa con trỏ về đầu file
+        # 7. Trả về file Zip
+        zip_io.seek(0)
         return StreamingResponse(
             content=zip_io,
             media_type="application/zip",

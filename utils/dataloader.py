@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Tuple
 from sklearn.model_selection import train_test_split
-from config import Config
+from .config import Config
 
 class ChurnDataLoader:
     def __init__(self, config: Config):

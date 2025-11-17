@@ -1,7 +1,6 @@
 """
 File: config.py
 Chứa Lớp Config (dataclass) để quản lý tất cả các tham số.
-Tương thích với cả chạy local (nếu bạn tự gán data_path) và API.
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -9,29 +8,24 @@ import os
 
 @dataclass
 class Config:
-    # --- Cấu trúc thư mục (Giữ nguyên của bạn) ---
+    # --- Cấu trúc thư mục ---
     
-    # Lấy thư mục gốc của dự án (ví dụ: Techspire/)
-    # Giả định file config.py nằm trong 1 thư mục con (vd: /utils/config.py)
-    # Nếu config.py nằm ở gốc, dùng: os.path.abspath(os.path.dirname(__file__))
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    # Nếu file config.py nằm ở thư mục gốc (cùng với api.py), 
-    # hãy dùng dòng này thay cho dòng trên:
-    # BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+    # SỬA: BASE_DIR bây giờ là thư mục cha của file này (vd: /utils)
+    # .../Techspire/utils -> .../Techspire
+    BASE_DIR = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
 
-    # --- Đường dẫn cho API (Sửa đổi) ---
-    
-    # data_path sẽ được pipeline_runner.py ghi đè khi chạy từ API
-    data_path: Optional[str] = None 
-    
-    # Định nghĩa nơi lưu file upload tạm thời
-    temp_upload_path: str = os.path.join(BASE_DIR, "temp_uploaded_data.bin")
+    # --- Đường dẫn ---
+    data_dir = os.path.join(BASE_DIR, "data")
+    os.makedirs(data_dir, exist_ok=True) 
 
-    # Sửa: Dùng sheet 0 (sheet đầu tiên) để API chấp nhận mọi file Excel
+    # Đường dẫn local mặc định
+    data_path: str = os.path.join(data_dir, "SkilioMall_Churn Dataset_50,000 Users.xlsx")
+    
     sheet_name: int = 0 
     target_column: str = "churn_label"
 
-    # --- Model Output Paths (Giữ nguyên của bạn) ---
+    # --- Model Output Paths ---
+    # (Đường dẫn này bây giờ đã đúng, vd: .../Techspire/outputs/artifacts)
     artifacts_dir = os.path.join(BASE_DIR, "outputs", "artifacts")
     os.makedirs(artifacts_dir, exist_ok=True)
     
@@ -41,13 +35,13 @@ class Config:
     cat_model_path: str    = os.path.join(artifacts_dir, "cat_model.pkl")
     ensemble_model_path: str = os.path.join(artifacts_dir, "ensemble_model.pkl")
     
-    # --- Metric Output Paths (Giữ nguyên của bạn) ---
+    # --- Metric Output Paths ---
     metrics_dir = os.path.join(BASE_DIR, "outputs", "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
     
     metric_path: str = os.path.join(metrics_dir, "metric.json")
 
-    # --- Tham số Training (Giữ nguyên của bạn) ---
+    # --- Tham số Training ---
     train_ratio: float = 0.70
     val_ratio: float = 0.15
     test_ratio: float = 0.15

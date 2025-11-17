@@ -16,17 +16,12 @@ from lightgbm import LGBMClassifier, early_stopping
 from catboost import CatBoostClassifier
 
 import optuna
-# from optuna.integration import TqdmCallback # <--- XÓA
 import shap
 from joblib import Parallel, delayed
-# from tqdm.auto import tqdm # <--- XÓA
 
-from config import Config
+from .config import Config
 
-# ============================================================
-# 4. SMOTE Wrapper
-# ============================================================
-
+# ... (SmoteBalancer không đổi) ...
 class SmoteBalancer:
     def __init__(self, config: Config):
         self.config = config
@@ -52,6 +47,7 @@ class SmoteBalancer:
 # ============================================================
 
 class ChurnModelTrainer:
+    # ... (__init__, _calc_scale_pos_weight, train_xgb_base không đổi) ...
     def __init__(self, config: Config):
         self.config = config
         self.logger = logging.getLogger(__name__)
@@ -70,8 +66,6 @@ class ChurnModelTrainer:
         pos = (y == 1).sum()
         return neg / pos if pos > 0 else 1.0
 
-    # ---------- Base Models (Dùng cho SHAP FS) ----------
-    # Sửa: Xóa side-effect (self.xgb_model = model), chỉ return
     def train_xgb_base(
         self, X_train: pd.DataFrame, y_train: pd.Series, X_val: pd.DataFrame, y_val: pd.Series
     ) -> XGBClassifier:
@@ -86,7 +80,6 @@ class ChurnModelTrainer:
         model = XGBClassifier(**params)
         model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
         self.logger.info(f"[XGB-Base] Trained with {model.best_iteration} iterations (AUC: {model.best_score:.4f}).")
-        # self.xgb_model = model # Xóa side-effect
         return model
 
     # Sửa: Xóa side-effect
@@ -100,10 +93,10 @@ class ChurnModelTrainer:
             random_state=self.config.random_state, loss_function="Logloss",
             eval_metric="AUC", scale_pos_weight=spw, verbose=False,
             early_stopping_rounds=50,
+            allow_writing_files=False # <--- SỬA (Vấn đề 1)
         )
         model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
         self.logger.info(f"[CatBoost-Base] Trained with {model.get_best_iteration()} iterations (AUC: {model.get_best_score()['validation']['AUC']:.4f}).")
-        # self.cat_model = model # Xóa side-effect
         return model
 
     # Sửa: Xóa side-effect
@@ -120,15 +113,11 @@ class ChurnModelTrainer:
         )
         model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
         self.logger.info(f"[LightGBM-Base] Trained with {model.best_iteration_} iterations (AUC: {model.best_score_['valid_0']['auc']:.4f}).")
-        # self.lgbm_model = model # Xóa side-effect
         return model
 
-    # ---------- SHAP Feature Selection (Parallel) ----------
-
-    # Sửa: Chuyển thành staticmethod để main.py gọi
+    # ... (_get_shap_values, process_shap_importances không đổi) ...
     @staticmethod
     def _get_shap_values(model: Any, X: pd.DataFrame, model_type: str) -> pd.Series:
-        # Static method không có self.logger, dùng logging
         logging.info(f"[SHAP-FS] Calculating for {model_type}...")
         try:
             explainer = shap.TreeExplainer(model)
@@ -143,45 +132,29 @@ class ChurnModelTrainer:
             logging.warning(f"[SHAP-FS] Error for {model_type}: {e}")
             return pd.Series(dtype=float, name=model_type)
 
-    # Sửa: Đổi tên và chỉ xử lý kết quả (logic parallel chuyển ra main.py)
     def process_shap_importances(self, shap_importance_results: List[pd.Series]) -> List[str]:
-        """
-        Nhận kết quả SHAP (tính song song) và xử lý (scale, aggregate, top-N).
-        """
         self.logger.info("[SHAP-FS] Processing aggregated SHAP results...")
-        
         df_importances = pd.concat(shap_importance_results, axis=1).fillna(0)
-        
-        # Chuẩn hóa (Min-Max)
         scaler = MinMaxScaler()
         df_importances_scaled = pd.DataFrame(
             scaler.fit_transform(df_importances),
             columns=df_importances.columns,
             index=df_importances.index
         )
-        
         df_importances_scaled["mean_importance"] = df_importances_scaled.mean(axis=1)
         final_importances = df_importances_scaled["mean_importance"].sort_values(ascending=False)
-        
         top_features = final_importances.head(self.config.shap_top_n_features).index.tolist()
-        
         self.logger.info(f"[SHAP FS] Top 5 features: {final_importances.head(5).index.tolist()}")
         self.logger.info(f"[SHAP FS] Selected {len(top_features)} features.")
-        
         self.top_features = top_features
         return top_features
 
-    # ---------- Optuna (với show_progress_bar=True) ----------
-    
-    # XÓA: def _create_tqdm_callback(self) -> TqdmCallback: ...
-    
-    # Sửa: Xóa side-effect
+    # ... (tune_xgb_optuna, tune_lgbm_optuna không đổi) ...
     def tune_xgb_optuna(
         self, X_train: pd.DataFrame, y_train: pd.Series, X_val: pd.DataFrame, y_val: pd.Series
     ) -> XGBClassifier:
         spw = self._calc_scale_pos_weight(y_train)
         self.logger.info(f"\n[Optuna-XGB] Tuning... (scale_pos_weight = {spw:.2f})")
-        # XÓA: tqdm_callback = self._create_tqdm_callback()
 
         def objective(trial: optuna.Trial) -> float:
             params = {
@@ -199,17 +172,14 @@ class ChurnModelTrainer:
                 **params,
             )
             model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-            # XÓA: tqdm_callback.update_best_trial(trial.number, model.best_score)
             return model.best_score
 
         study = optuna.create_study(direction="maximize")
         study.optimize(
             objective, n_trials=self.config.optuna_n_trials,
             timeout=self.config.optuna_timeout,
-            show_progress_bar=True # <--- THAY ĐỔI
-            # callbacks=[tqdm_callback] # <--- XÓA
+            show_progress_bar=True
         )
-        # XÓA: tqdm_callback.tqdm.close()
         self.logger.info(f"[Optuna-XGB] Best value (AUC): {study.best_value:.4f}")
         
         best_model = XGBClassifier(
@@ -218,16 +188,13 @@ class ChurnModelTrainer:
             **study.best_params,
         )
         best_model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-        # self.xgb_model = best_model # Xóa side-effect
         return best_model
 
-    # Sửa: Xóa side-effect
     def tune_lgbm_optuna(
         self, X_train: pd.DataFrame, y_train: pd.Series, X_val: pd.DataFrame, y_val: pd.Series
     ) -> LGBMClassifier:
         spw = self._calc_scale_pos_weight(y_train)
         self.logger.info(f"\n[Optuna-LGBM] Tuning... (scale_pos_weight = {spw:.2f})")
-        # XÓA: tqdm_callback = self._create_tqdm_callback()
 
         def objective(trial: optuna.Trial) -> float:
             params = {
@@ -246,17 +213,14 @@ class ChurnModelTrainer:
             )
             model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
             auc = model.best_score_['valid_0']['auc']
-            # XÓA: tqdm_callback.update_best_trial(trial.number, auc)
             return auc
 
         study = optuna.create_study(direction="maximize")
         study.optimize(
             objective, n_trials=self.config.optuna_n_trials,
             timeout=self.config.optuna_timeout,
-            show_progress_bar=True # <--- THAY ĐỔI
-            # callbacks=[tqdm_callback] # <--- XÓA
+            show_progress_bar=True
         )
-        # XÓA: tqdm_callback.tqdm.close()
         self.logger.info(f"[Optuna-LGBM] Best value (AUC): {study.best_value:.4f}")
         
         best_model = LGBMClassifier(
@@ -266,7 +230,6 @@ class ChurnModelTrainer:
             **study.best_params,
         )
         best_model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
-        # self.lgbm_model = best_model # Xóa side-effect
         return best_model
 
     # Sửa: Xóa side-effect
@@ -275,7 +238,6 @@ class ChurnModelTrainer:
     ) -> CatBoostClassifier:
         spw = self._calc_scale_pos_weight(y_train)
         self.logger.info(f"\n[Optuna-CatBoost] Tuning... (scale_pos_weight = {spw:.2f})")
-        # XÓA: tqdm_callback = self._create_tqdm_callback()
 
         def objective(trial: optuna.Trial) -> float:
             params = {
@@ -289,35 +251,32 @@ class ChurnModelTrainer:
                 random_state=self.config.random_state, loss_function="Logloss",
                 eval_metric="AUC", scale_pos_weight=spw, verbose=False,
                 early_stopping_rounds=50,
+                allow_writing_files=False, # <--- SỬA (Vấn đề 1)
                 **params,
             )
             model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
             auc = model.get_best_score()['validation']['AUC']
-            # XÓA: tqdm_callback.update_best_trial(trial.number, auc)
             return auc
 
         study = optuna.create_study(direction="maximize")
         study.optimize(
             objective, n_trials=self.config.optuna_n_trials,
             timeout=self.config.optuna_timeout,
-            show_progress_bar=True # <--- THAY ĐỔI
-            # callbacks=[tqdm_callback] # <--- XÓA
+            show_progress_bar=True
         )
-        # XÓA: tqdm_callback.tqdm.close()
         self.logger.info(f"[Optuna-CatBoost] Best value (AUC): {study.best_value:.4f}")
 
         best_model = CatBoostClassifier(
             random_state=self.config.random_state, loss_function="Logloss",
             eval_metric="AUC", scale_pos_weight=spw, verbose=False,
             early_stopping_rounds=50,
+            allow_writing_files=False, # <--- SỬA (Vấn đề 1)
             **study.best_params,
         )
         best_model.fit(X_train, y_train, eval_set=[(X_val, y_val)])
-        # self.cat_model = best_model # Xóa side-effect
         return best_model
 
-    # ---------- Ensemble & Predict ----------
-    
+    # ... (build_ensemble, predict_proba_ensemble, calculate_final_shap_values, _save_model, save_xgb, save_lgbm, save_cat, save_ensemble không đổi) ...
     def build_ensemble(self):
         if not (self.xgb_model and self.lgbm_model and self.cat_model):
             self.logger.error("Need tuned models for ensemble. Models were not set on trainer.")
@@ -341,8 +300,6 @@ class ChurnModelTrainer:
         proba = (p_xgb + p_lgbm + p_cat) / 3.0
         return proba
 
-    # ---------- SHAP (Final) ----------
-    
     def calculate_final_shap_values(self, X_data: pd.DataFrame):
         if self.top_features is None:
             raise RuntimeError("top_features must be set.")
@@ -373,8 +330,6 @@ class ChurnModelTrainer:
         )
         self.logger.info("[SHAP-Final] All SHAP values calculated and stored.")
 
-    # ---------- Save Models ----------
-    
     def _save_model(self, model: Any, path: str, model_name: str):
         if model is None:
             self.logger.error(f"{model_name} model not trained. Cannot save.")

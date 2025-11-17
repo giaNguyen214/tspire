@@ -7,13 +7,14 @@ import logging
 import json
 from typing import List
 from joblib import Parallel, delayed
+import os
 
-from config import Config
-from utils import set_global_seed, setup_logging
-from dataloader import ChurnDataLoader
-from preprocessor import ChurnPreprocessor
-from trainer import ChurnModelTrainer, SmoteBalancer
-from evaluator import ChurnEvaluator
+from .config import Config
+from .utils import set_global_seed, setup_logging
+from .dataloader import ChurnDataLoader
+from .preprocessor import ChurnPreprocessor
+from .trainer import ChurnModelTrainer, SmoteBalancer
+from .evaluator import ChurnEvaluator
 
 # Đổi tên main() thành run_training_pipeline()
 # Thêm tham số: data_file_path
@@ -193,3 +194,24 @@ def run_training_pipeline(data_file_path: str) -> List[str]:
 # Hàm này để thiết lập logging khi chạy từ API
 def initialize_logging():
     setup_logging()
+    
+    
+if __name__ == "__main__":
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("--- Running pipeline in LOCAL mode ---")
+    
+    config = Config()
+    
+    # Kiểm tra xem file data local trong config có tồn tại không
+    if config.data_path and os.path.exists(config.data_path):
+        logger.info(f"Using local data file: {config.data_path}")
+        # Chạy pipeline với file local
+        run_training_pipeline(config.data_path)
+    else:
+        # Báo lỗi nếu không tìm thấy file
+        logger.error("="*50)
+        logger.error("LOCAL RUN FAILED: `data_path` not found in config.py")
+        logger.error(f"File not found: {config.data_path}")
+        logger.error("Please edit 'config.py' to point to your local data file.")
+        logger.error("="*50)
