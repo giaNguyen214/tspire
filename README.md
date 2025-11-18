@@ -12,15 +12,15 @@ To install all required dependencies, run the following command:
 
 
 ## 1. Streamlit Web Demo
-- Run locally: streamlit run streamlit_app.py
+- Run locally: ```streamlit run streamlit_app.py```
 - Online demo: You can try the deployed version here https://techspire-gia-nguyen.streamlit.app/
 
 ## 2. FastAPI Service
-- Run locally: uvicorn api:app --reload
+- Run locally: ```uvicorn api:app --reload```
 - After running, open the API documentation at: http://127.0.0.1:8000/docs
 
 - Main API Endpoints
-  - 1. /predict-single/
+  - 1. ```/predict-single/```
     - Make a single prediction.
     - Parameter shap: choose whether to generate SHAP results or not.
     - Sample Request Body
@@ -61,16 +61,16 @@ To install all required dependencies, run the following command:
       ```
 
 
-  - 2. /download/{filename}
+  - 2. ```/download/{filename}```
     - Download SHAP results as a ZIP file.
     - Example: /download/shap_outputs.zip
 
 ## 3. Training the Model
-- Run training: python train.py
+- Run training: ```python train.py```
 - This script trains the model and saves all outputs into outputs/artifacts.
 
 ## 4. Local Inference Script
-- Run inference: python inference.py
+- Run inference: ```python inference.py```
 - This uses the sample data file and prints the prediction result. SHAP results (if enabled) will be saved inside outputs/shap_inference.
 
 ## 5. Project Structure
