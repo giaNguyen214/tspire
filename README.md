@@ -20,7 +20,8 @@ This project includes:
   - 1. /predict-single/
     - Make a single prediction.
     - Parameter shap: choose whether to generate SHAP results or not.
-    - Sample Request Body:
+    - Sample Request Body
+      ```json
       {
         "age": 20,
         "country": "Thailand",
@@ -54,6 +55,8 @@ This project includes:
         "rfm_frequency": 4,
         "rfm_monetary": 80.58
       }
+      ```
+
 
   - 2. /download/{filename}
     - Download SHAP results as a ZIP file.
