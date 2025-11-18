@@ -15,6 +15,9 @@ from utils.dataloader import ChurnDataLoader
 from utils.preprocessor import ChurnPreprocessor
 from utils.trainer import ChurnModelTrainer, SmoteBalancer
 from utils.evaluator import ChurnEvaluator
+import matplotlib
+matplotlib.use("Agg")
+from utils.eda import run_eda
 
 
 # Đổi tên main() thành run_training_pipeline()
@@ -42,6 +45,11 @@ def run_training_pipeline(data_file_path: str) -> List[str]:
         loader = ChurnDataLoader(config)
         df = loader.load_raw_data()
         numerical_cols, categorical_cols = loader.get_column_types(df)
+        
+        # NEW — Gọi EDA
+        eda_results = run_eda(df, numerical_cols)
+        logger.info(f"EDA files generated: {eda_results}")
+
 
         # 2. Split data
         logger.info("\n--- STEP 2: Split Data ---")

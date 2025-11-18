@@ -8,6 +8,8 @@ import logging
 import pandas as pd
 import numpy as np
 import shap
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from utils.preprocessor import ChurnPreprocessor
@@ -28,6 +30,8 @@ os.makedirs(SHAP_OUTPUT_DIR, exist_ok=True)
 # ============================================================
 
 config = Config()
+IN_API_ZIP_MODE = False
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Inference")
 
@@ -169,14 +173,18 @@ def predict_batch(
 
         X_shap = X_fs.iloc[:n]
 
+        # Decide SHAP dir
+        shap_dir = Config.shap_api_dir if IN_API_ZIP_MODE else SHAP_OUTPUT_DIR
+
+        # Save to model subfolders
         shap_xgb = compute_shap("xgb", xgb_model, X_shap)
-        save_shap_plots("xgb", shap_xgb, X_shap, f"{SHAP_OUTPUT_DIR}/xgb")
+        save_shap_plots("xgb", shap_xgb, X_shap, f"{shap_dir}/xgb")
 
         shap_lgb = compute_shap("lgbm", lgbm_model, X_shap)
-        save_shap_plots("lgbm", shap_lgb, X_shap, f"{SHAP_OUTPUT_DIR}/lgbm")
+        save_shap_plots("lgbm", shap_lgb, X_shap, f"{shap_dir}/lgbm")
 
         shap_cat = compute_shap("cat", cat_model, X_shap)
-        save_shap_plots("cat", shap_cat, X_shap, f"{SHAP_OUTPUT_DIR}/cat")
+        save_shap_plots("cat", shap_cat, X_shap, f"{shap_dir}/cat")
 
     return results
 
@@ -192,11 +200,70 @@ def predict_single(sample_dict: dict, explain: bool = ENABLE_SHAP):
     return result_df.iloc[0].to_dict()
 
 
+def generate_zip_results(
+    df_raw: pd.DataFrame,
+    explain: bool = True,
+    max_rows: int = 100
+):
+    """
+    API helper:
+    - Gọi predict_batch() => tạo 9 ảnh SHAP
+    - Gom ảnh + kết quả CSV vào 1 file ZIP
+    - Trả về (path_zip, prediction_dataframe)
+    """
+
+    # 1) Run prediction (SHAP inside)
+    global IN_API_ZIP_MODE
+    # Turn on API ZIP mode
+    IN_API_ZIP_MODE = True
+
+    pred_df = predict_batch(df_raw, explain=explain, max_shap_rows=max_rows)
+
+    # Turn off after done
+    IN_API_ZIP_MODE = False
+
+    # 2) Collect SHAP image paths WITH MODEL PREFIX
+    image_paths = []
+    for model in ["xgb", "lgbm", "cat"]:
+        folder = f"{Config.shap_api_dir}/{model}"
+        for name in ["summary.png", "bar.png", "waterfall.png"]:
+            old_path = f"{folder}/{name}"
+            if os.path.exists(old_path):
+                # e.g. xgb_summary.png
+                new_name = f"{model}_{name}"
+                image_paths.append((old_path, new_name))
+
+    # 3) Prepare ZIP path
+    zip_path = f"{Config.shap_api_dir}/shap_outputs.zip"
+
+    # Remove old file
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+
+    # 4) Write ZIP
+    import zipfile
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+
+        # Add prediction CSV
+        pred_csv_path = f"{Config.shap_api_dir}/pred_results.csv"
+        pred_df.to_csv(pred_csv_path, index=False)
+        zipf.write(pred_csv_path, arcname="pred_results.csv")
+
+        # Add SHAP images (renamed)
+        for old_path, new_name in image_paths:
+            zipf.write(old_path, arcname=new_name)
+
+    return zip_path, pred_df
+
+
 # ============================================================
 # DEMO WHEN RUN DIRECT
 # ============================================================
 
 if __name__ == "__main__":
+    print("===== Loading models =====")
+    load_all_models()
+    
     # -------------------------------------
     # Single
     # -------------------------------------

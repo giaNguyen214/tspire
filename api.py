@@ -10,7 +10,7 @@ import io
 import zipfile
 import uuid
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import pandas as pd
 
 # ====== TRAINING IMPORT ======
@@ -21,13 +21,11 @@ from train import run_training_pipeline
 # ====== INFERENCE IMPORT ======
 from inference import (
     load_all_models,
-    predict_single,
-    predict_batch,
-    compute_shap_outputs,
+    generate_zip_results,   # dùng đúng 1 hàm duy nhất
 )
 
 # Ensure SHAP output dir exists
-os.makedirs(Config.SHAP_OUTPUT_DIR, exist_ok=True)
+os.makedirs(Config.shap_api_dir, exist_ok=True)
 
 app = FastAPI(
     title="Churn Model API",
@@ -37,7 +35,7 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     setup_logging()
-    load_all_models()  # load models once at startup
+    load_all_models()
 
 
 # ==============================================================
@@ -46,47 +44,32 @@ async def startup_event():
 
 @app.post("/train-pipeline/")
 async def train_pipeline_endpoint(file: UploadFile = File(...)):
-    """
-    Upload CSV/XLSX → train pipeline → return ZIP of all models + metrics.
-    """
     logger = logging.getLogger(__name__)
 
-    # Validate extension
     file_ext = os.path.splitext(file.filename)[1].lower()
     if file_ext not in [".csv", ".xlsx", ".xls"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file format. Please upload .csv, .xlsx, or .xls"
-        )
+        raise HTTPException(400, "Invalid file format")
 
-    # Create temp file inside data dir
-    temp_file_name = f"temp_upload_{uuid.uuid4()}{file_ext}"
-    temp_file_path = os.path.join(Config.data_dir, temp_file_name)
-
-    logger.info(f"Saving uploaded file to: {temp_file_path}")
+    temp_file = os.path.join(Config.data_dir, f"upload_{uuid.uuid4()}{file_ext}")
 
     try:
-        # Save upload
-        with open(temp_file_path, "wb") as buffer:
+        with open(temp_file, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        logger.info("Running training pipeline...")
-        output_files = run_training_pipeline(temp_file_path)
+        output_files = run_training_pipeline(temp_file)
 
         if not output_files:
-            raise HTTPException(500, "Pipeline failed. Check logs.")
+            raise HTTPException(500, "Training pipeline failed")
 
-        # Build ZIP in-memory
         zip_io = io.BytesIO()
-        with zipfile.ZipFile(zip_io, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for f_path in output_files:
-                if os.path.exists(f_path):
-                    zipf.write(f_path, arcname=os.path.basename(f_path))
+        with zipfile.ZipFile(zip_io, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for f in output_files:
+                if os.path.exists(f):
+                    zipf.write(f, arcname=os.path.basename(f))
 
-        # Remove temp file
-        os.remove(temp_file_path)
-
+        os.remove(temp_file)
         zip_io.seek(0)
+
         return StreamingResponse(
             zip_io,
             media_type="application/zip",
@@ -94,87 +77,97 @@ async def train_pipeline_endpoint(file: UploadFile = File(...)):
         )
 
     except Exception as e:
-        logger.error(f"Training error: {e}", exc_info=True)
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-        raise HTTPException(500, str(e))
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        raise
+
+@app.get("/download/{filename}")
+async def download_zip(filename: str):
+    file_path = os.path.join(Config.shap_api_dir, filename)
+
+    print("DOWNLOAD ROUTE → filename:", filename)
+    print("ABS PATH:", file_path)
+    print("EXISTS:", os.path.exists(file_path))
+
+    if not os.path.exists(file_path):
+        raise HTTPException(404, "File not found")
+
+    return FileResponse(
+        file_path,
+        media_type="application/zip",
+        filename=filename
+    )
 
 
 # ==============================================================
-#                  INFERENCE: SINGLE SAMPLE
+#                INFERENCE: SINGLE PREDICT (ZIP)
 # ==============================================================
 
 @app.post("/predict-single/")
-async def api_predict_single(data: dict, shap: bool = True, waterfall_index: int = 0):
+async def api_predict_single(data: dict, shap: bool = True):
     """
-    Predict for a single record.
-    - data: dict (1 sample)
-    - shap: bool (default ON)
-    - waterfall_index: used for SHAP waterfall
+    Predict 1 record:
+    - return JSON: prediction + download_url
     """
     try:
         df = pd.DataFrame([data])
-        result = predict_single(df)
 
-        shap_paths = None
-        if shap:
-            shap_paths = compute_shap_outputs(df, waterfall_index=waterfall_index)
+        zip_path, pred_df = generate_zip_results(
+            df_raw=df,
+            explain=shap,
+            max_rows=1
+        )
 
-        return JSONResponse({
-            "prediction": result,
-            "shap_files": shap_paths if shap else None
-        })
+        filename = os.path.basename(zip_path)
+
+        return {
+            "prediction": pred_df.to_dict(orient="records")[0],
+            "download_url": f"/download/{filename}"
+        }
 
     except Exception as e:
         raise HTTPException(500, f"Predict-single failed: {e}")
 
 
+
 # ==============================================================
-#                  INFERENCE: BATCH PREDICT
+#                INFERENCE: BATCH PREDICT (ZIP)
 # ==============================================================
 
 @app.post("/predict-batch/")
 async def api_predict_batch(
     file: UploadFile = File(...),
     shap: bool = True,
-    max_samples: int = 100,
-    waterfall_index: int = 0
+    max_samples: int = 100
 ):
     """
-    Batch prediction:
-    - Upload CSV/XLSX
-    - SHAP summary/bar/waterfall (waterfall only first sample or chosen index)
+    Batch JSON + link download.
     """
     try:
         ext = os.path.splitext(file.filename)[1].lower()
         if ext not in [".csv", ".xlsx"]:
-            raise HTTPException(400, "File must be CSV or XLSX")
+            raise HTTPException(400, "Must upload CSV or XLSX")
 
-        # Load file
-        if ext == ".csv":
-            df = pd.read_csv(file.file)
-        else:
-            df = pd.read_excel(file.file)
-
+        df = pd.read_csv(file.file) if ext == ".csv" else pd.read_excel(file.file)
         df = df.head(max_samples)
 
-        # Predict
-        pred_df = predict_batch(df)
+        zip_path, pred_df = generate_zip_results(
+            df_raw=df,
+            explain=shap,
+            max_rows=max_samples
+        )
 
-        # SHAP
-        shap_paths = None
-        if shap:
-            shap_paths = compute_shap_outputs(df, waterfall_index=waterfall_index)
+        filename = os.path.basename(zip_path)
 
-        # Return JSON only (predictions + shap paths)
-        return JSONResponse({
-            "num_samples": len(df),
-            "results": pred_df.to_dict(orient="records"),
-            "shap_files": shap_paths
-        })
+        return {
+            "num_samples": len(pred_df),
+            "predictions": pred_df.to_dict(orient="records"),
+            "download_url": f"/download/{filename}"
+        }
 
     except Exception as e:
         raise HTTPException(500, f"Predict-batch failed: {e}")
+
 
 
 # ==============================================================
@@ -184,7 +177,7 @@ async def api_predict_batch(
 @app.get("/")
 def read_root():
     return {
-        "message": "Welcome to the Churn Model API.",
+        "message": "Welcome to the Churn Model API",
         "endpoints": [
             "/train-pipeline/",
             "/predict-single/",

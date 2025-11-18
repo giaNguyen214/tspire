@@ -43,8 +43,18 @@ class Config:
     metric_path: str = os.path.join(metrics_dir, "metric.json")
     shap_dir = os.path.join(metrics_dir, "shap")
     os.makedirs(shap_dir, exist_ok=True)
+    
+    # lưu kết quả nhưng cho api call
+    shap_api_dir = os.path.join(BASE_DIR, "outputs", "shap_api")
+    os.makedirs(shap_api_dir, exist_ok=True)
+    
     eval_plot_dir = os.path.join(metrics_dir, "evaluation")
     os.makedirs(eval_plot_dir, exist_ok=True)
+    
+    # ---EDA Paths ---
+    eda_dir  = os.path.join(BASE_DIR, "outputs", "eda")
+    os.makedirs(eda_dir, exist_ok=True)
+    
 
     # --- Tham số Training ---
     train_ratio: float = 0.70
