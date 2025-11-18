@@ -7,6 +7,9 @@ This project includes:
 - Training and inference scripts.
 - Output folders for SHAP images, model artifacts, and evaluation metrics.
 
+To install all required dependencies, run the following command:
+```pip install -r requirements.txt```
+
 
 ## 1. Streamlit Web Demo
 - Run locally: streamlit run streamlit_app.py
