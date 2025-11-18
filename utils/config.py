@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Optional
 import os
 
+
 @dataclass
 class Config:
     # --- Cấu trúc thư mục ---
@@ -40,6 +41,10 @@ class Config:
     os.makedirs(metrics_dir, exist_ok=True)
     
     metric_path: str = os.path.join(metrics_dir, "metric.json")
+    shap_dir = os.path.join(metrics_dir, "shap")
+    os.makedirs(shap_dir, exist_ok=True)
+    eval_plot_dir = os.path.join(metrics_dir, "evaluation")
+    os.makedirs(eval_plot_dir, exist_ok=True)
 
     # --- Tham số Training ---
     train_ratio: float = 0.70
@@ -50,6 +55,6 @@ class Config:
     smote_k_neighbors: int = 5
     smote_sampling_strategy: float = 1.0  # 1.0 = balance
 
-    shap_top_n_features: int = 20
+    shap_top_n_features: int = 30 # because of encoding, there are about 40 cols
     optuna_n_trials: int = 10
     optuna_timeout: Optional[int] = None  # seconds

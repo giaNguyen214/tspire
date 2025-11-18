@@ -8,6 +8,8 @@ import pickle
 from typing import List, Tuple, Dict, Optional, Any
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import os
 
 from sklearn.preprocessing import MinMaxScaler
 from imblearn.over_sampling import SMOTE
@@ -20,6 +22,10 @@ import shap
 from joblib import Parallel, delayed
 
 from .config import Config
+
+import warnings
+warnings.filterwarnings("ignore", message="The NumPy global RNG was seeded")
+
 
 # ... (SmoteBalancer không đổi) ...
 class SmoteBalancer:
@@ -299,6 +305,36 @@ class ChurnModelTrainer:
         p_cat = self.cat_model.predict_proba(X_filtered)[:, 1]
         proba = (p_xgb + p_lgbm + p_cat) / 3.0
         return proba
+    
+    def save_all_shap_plots(self, model_name: str, shap_values, X_filtered):
+        """
+        Lưu tất cả SHAP plots cho 1 model:
+        - summary
+        - bar
+        - waterfall (record 0)
+        """
+        shap_dir = Config.shap_dir
+
+        # --- Summary Plot ---
+        plt.figure()
+        shap.summary_plot(shap_values.values, X_filtered, show=False)
+        plt.savefig(os.path.join(shap_dir, f"{model_name}_summary.png"), bbox_inches="tight")
+        plt.close()
+
+        # --- Bar Plot ---
+        plt.figure()
+        shap.plots.bar(shap_values, show=False)
+        plt.savefig(os.path.join(shap_dir, f"{model_name}_bar.png"), bbox_inches="tight")
+        plt.close()
+
+        # --- Waterfall Plot ---
+        plt.figure()
+        shap.plots.waterfall(shap_values[0], show=False)
+        plt.savefig(os.path.join(shap_dir, f"{model_name}_waterfall_0.png"), bbox_inches="tight")
+        plt.close()
+
+        self.logger.info(f"[SHAP] Saved all SHAP plots for {model_name}")
+
 
     def calculate_final_shap_values(self, X_data: pd.DataFrame):
         if self.top_features is None:
@@ -316,10 +352,55 @@ class ChurnModelTrainer:
         self.logger.info("[SHAP-Final] Calculating for LGBM...")
         explainer_lgbm = shap.TreeExplainer(self.lgbm_model)
         shap_vals_lgbm = explainer_lgbm.shap_values(X_filtered, check_additivity=False)
+        
+        # print("\n===== DEBUG SHAP VALUES =====")
+
+        # # 1. Kiểu dữ liệu shap_values
+        # print("Type of shap_vals_lgbm:", type(shap_vals_lgbm))
+
+        # # 2. Nếu là list → multi-class hoặc binary-class
+        # if isinstance(shap_vals_lgbm, list):
+        #     print("Number of output classes (len of shap list):", len(shap_vals_lgbm))
+            
+        #     for i, arr in enumerate(shap_vals_lgbm):
+        #         print(f"  Class {i} SHAP shape:", arr.shape)
+
+        # else:
+        #     # Nếu không phải list → SHAP trả thẳng mảng (binary raw score)
+        #     print("SHAP array shape:", shap_vals_lgbm.shape)
+
+        # # 3. Expected values
+        # print("\nType of expected_value:", type(explainer_lgbm.expected_value))
+        # print("expected_value:", explainer_lgbm.expected_value)
+
+        # # Nếu là list → print từng class
+        # if isinstance(explainer_lgbm.expected_value, list) or isinstance(explainer_lgbm.expected_value, np.ndarray):
+        #     for i, base in enumerate(explainer_lgbm.expected_value):
+        #         print(f"  expected_value for class {i}:", base)
+
+        # print("================================\n")
+        
+        # self.shap_values_lgbm = shap.Explanation(
+        #      values=shap_vals_lgbm[1], base_values=explainer_lgbm.expected_value,
+        #      data=X_filtered, feature_names=X_filtered.columns
+        # )
+        if isinstance(shap_vals_lgbm, list):
+            # LightGBM <= 4.0 style: returns list of arrays
+            shap_matrix = shap_vals_lgbm[1]      # class 1
+            base = explainer_lgbm.expected_value[1]
+        else:
+            # LightGBM >= 4.0 style: returns single ndarray
+            shap_matrix = shap_vals_lgbm
+            base = explainer_lgbm.expected_value
+
+        # Create Explanation correctly
         self.shap_values_lgbm = shap.Explanation(
-             values=shap_vals_lgbm[1], base_values=explainer_lgbm.expected_value,
-             data=X_filtered, feature_names=X_filtered.columns
+            values=shap_matrix,
+            data=X_filtered,
+            base_values=base,
+            feature_names=X_filtered.columns,
         )
+
 
         self.logger.info("[SHAP-Final] Calculating for CatBoost...")
         explainer_cat = shap.TreeExplainer(self.cat_model)
@@ -329,6 +410,11 @@ class ChurnModelTrainer:
              data=X_filtered, feature_names=X_filtered.columns
         )
         self.logger.info("[SHAP-Final] All SHAP values calculated and stored.")
+        
+        self.save_all_shap_plots("xgb",  self.shap_values_xgb,  X_filtered)
+        self.save_all_shap_plots("lgbm", self.shap_values_lgbm, X_filtered)
+        self.save_all_shap_plots("cat",  self.shap_values_cat,  X_filtered)
+
 
     def _save_model(self, model: Any, path: str, model_name: str):
         if model is None:
