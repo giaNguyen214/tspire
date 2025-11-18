@@ -71,6 +71,7 @@ This project includes:
 - This uses the sample data file and prints the prediction result. SHAP results (if enabled) will be saved inside outputs/shap_inference.
 
 ## 5. Project Structure
+```
 project/
 │
 ├── api.py                 # FastAPI application
@@ -88,3 +89,4 @@ project/
 │   └── metrics/           # Model evaluation metrics
 │
 └── README.md
+```
