@@ -13,7 +13,8 @@ class Config:
     
     # SỬA: BASE_DIR bây giờ là thư mục cha của file này (vd: /utils)
     # .../Techspire/utils -> .../Techspire
-    BASE_DIR = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 
     # --- Đường dẫn ---
     data_dir = os.path.join(BASE_DIR, "data")
